@@ -1,0 +1,19 @@
+lnb
+
+# vim
+*.swp
+
+*.hex
+*.db
+*.bin
+
+vendor
+*.idea
+*.iml
+profile.cov
+profile.tmp
+
+.DS_Store
+
+.vscode
+
