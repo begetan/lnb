@@ -41,15 +41,29 @@ type ChanHTLC struct {
 	}
 }
 
+// TotalBalance contains total data for channels
 type TotalBalance struct {
-	Capacity   int64
-	Local      int64
-	Remote     int64
-	AmountIn   int64
-	AmountOut  int64
-	CommitFee  int64
-	Ratio      float64
-	Efficiency float64
+	Capacity      int64
+	LocalBalance  int64
+	RemoteBalance int64
+	AmountIn      int64
+	AmountOut     int64
+	CommitFee     int64
+	Ratio         float64
+	Efficiency    float64
+}
+
+// TotalChannels contains extended total data for all channels
+type TotalChannels struct {
+	TotalBalance
+	DayAmountSatIn    uint64
+	DayAmountSatOut   uint64
+	MonthAmountSatIn  uint64
+	MonthAmountSatOut uint64
+
+	DayFee   decimal.Decimal
+	WeekFee  decimal.Decimal
+	MonthFee decimal.Decimal
 }
 
 func getStatus(ctx *cli.Context) error {
@@ -185,7 +199,7 @@ func listContracts(ctx *cli.Context) error {
 		}
 		args = args[1:]
 	default:
-		now := time.Now()
+		now := time.Now().UTC()
 		startTime = uint64(now.Add(-time.Hour * 24 * 30).Unix())
 	}
 
@@ -241,46 +255,6 @@ func listContracts(ctx *cli.Context) error {
 	return nil
 }
 
-func printBalance(channels *lnrpc.ListChannelsResponse) {
-	title := " Capacity " +
-		"|    Local " +
-		"|   Remote " +
-		"| CommitFee" +
-		"| Ratio " +
-		"| Total In Out Amount" +
-		"| Efficiency"
-
-	fmt.Printf(title + "\n")
-	fmt.Printf(strings.Repeat("-", len(title)) + "\n")
-
-	balance := TotalBalance{}
-
-	for _, c := range channels.Channels {
-		balance.Capacity += c.Capacity
-		balance.Local += c.LocalBalance
-		balance.Remote += c.RemoteBalance
-		balance.AmountIn += c.TotalSatoshisReceived
-		balance.AmountOut += c.TotalSatoshisSent
-		balance.CommitFee += c.CommitFee
-	}
-
-	if balance.Local > 0 {
-		balance.Ratio = float64(balance.Local) / float64(balance.Local+balance.Remote) * 100
-		balance.Efficiency = (float64(balance.AmountIn) + float64(balance.AmountOut)) / float64(balance.Capacity) * 100
-	}
-
-	fmt.Printf("%9d |%9d |%9d |%9d | %5d%% |%9d %-9d |%5d%%\n",
-		balance.Capacity,
-		balance.Local,
-		balance.Remote,
-		balance.CommitFee,
-		int64(math.Round(balance.Ratio)),
-		balance.AmountIn,
-		balance.AmountOut,
-		int64(math.Round(balance.Efficiency)),
-	)
-}
-
 func countHTLC(ctx *cli.Context) (SumHTLC, error) {
 
 	sum := make(SumHTLC)
@@ -289,7 +263,7 @@ func countHTLC(ctx *cli.Context) (SumHTLC, error) {
 	client, cleanUp := client.GetClient(ctx)
 	defer cleanUp()
 
-	now := time.Now()
+	now := time.Now().UTC()
 	end := uint64(now.Unix())
 
 	startDay := uint64(now.Add(-time.Hour * 24).Unix())
@@ -345,8 +319,54 @@ func countHTLC(ctx *cli.Context) (SumHTLC, error) {
 	return sum, nil
 }
 
+func printBalance(channels *lnrpc.ListChannelsResponse) {
+	title := " Capacity " +
+		"|    Local " +
+		"|   Remote " +
+		"| CommitFee" +
+		"| Ratio " +
+		"| Total In Out Amount" +
+		"| Efficiency"
+	line := strings.Repeat("-", len(title))
+
+	row := "%9d |%9d |%9d |%9d | %5d%% |%9d %-9d |%5d%%"
+
+	fmt.Printf(title + "\n")
+	fmt.Printf(line + "\n")
+
+	b := TotalBalance{}
+
+	for _, c := range channels.Channels {
+		b.Capacity += c.Capacity
+		b.LocalBalance += c.LocalBalance
+		b.RemoteBalance += c.RemoteBalance
+		b.AmountIn += c.TotalSatoshisReceived
+		b.AmountOut += c.TotalSatoshisSent
+		b.CommitFee += c.CommitFee
+	}
+
+	if b.LocalBalance > 0 {
+		b.Ratio = float64(b.LocalBalance) / float64(b.LocalBalance+b.RemoteBalance) * 100
+		b.Efficiency = (float64(b.AmountIn) + float64(b.AmountOut)) / float64(b.Capacity) * 100
+	}
+
+	fmt.Printf(row+"\n",
+		b.Capacity,
+		b.LocalBalance,
+		b.RemoteBalance,
+		b.CommitFee,
+		int64(math.Round(b.Ratio)),
+		b.AmountIn,
+		b.AmountOut,
+		int64(math.Round(b.Efficiency)),
+	)
+}
+
 func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 
+	t := TotalChannels{}
+
+	// Table formaters
 	title := "  Num |    Channel ID | Public Key" +
 		"| Capacity |    Local |   Remote | Ratio " +
 		"|   Day In Out Amount" +
@@ -354,9 +374,12 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 		"|Mon Fee" +
 		"| Total In Out Amount" +
 		"| Effcy"
+	line := strings.Repeat("-", len(title))
+	row := "%5d%s|%11s |%10s |%9d |%9d |%9d |%5d%% |%9d %-9d |%9d %-9d |%6s |%9d %-9d |%5d%%"
 
+	// Print table
 	fmt.Printf(title + "\n")
-	fmt.Printf(strings.Repeat("-", len(title)) + "\n")
+	fmt.Printf(line + "\n")
 
 	sort.SliceStable(channels.Channels, func(i, j int) bool {
 		return channels.Channels[i].ChanId > channels.Channels[j].ChanId
@@ -395,7 +418,7 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 
 		}
 
-		fmt.Printf("%5d%s|%11s |%10s |%9d |%9d |%9d |%5d%% |%9d %-9d |%9d %-9d |%6s |%9d %-9d |%5d%%\n",
+		fmt.Printf(row+"\n",
 			i+1,
 			active,
 			mark,
@@ -413,12 +436,52 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 			totalOut,
 			int64(math.Round(efficiency)),
 		)
+
+		t.Capacity += c.Capacity
+		t.LocalBalance += c.LocalBalance
+		t.RemoteBalance += c.RemoteBalance
+		t.AmountIn += totalIn
+		t.AmountOut += totalOut
+		t.CommitFee += c.CommitFee
+		t.MonthFee = t.MonthFee.Add(monthFeeSat)
+
+		t.DayAmountSatIn += sum[c.ChanId].Day.AmountSatIn
+		t.DayAmountSatOut += sum[c.ChanId].Day.AmountSatOut
+		t.MonthAmountSatIn += sum[c.ChanId].Month.AmountSatIn
+		t.MonthAmountSatOut += sum[c.ChanId].Month.AmountSatOut
+
 	}
+	if t.LocalBalance > 0 {
+		t.Ratio = float64(t.LocalBalance) / float64(t.LocalBalance+t.RemoteBalance) * 100
+		t.Efficiency = (float64(t.AmountIn) + float64(t.AmountOut)) / float64(t.Capacity) * 100
+	}
+
+	// Print total row
+	fmt.Printf(line + "\n")
+	fmt.Printf(row+"\n",
+		len(channels.Channels),
+		" ",
+		"              ",
+		"  ",
+		t.Capacity,
+		t.LocalBalance,
+		t.RemoteBalance,
+		int64(math.Round(t.Ratio)),
+		t.DayAmountSatIn,
+		t.DayAmountSatOut,
+		t.MonthAmountSatIn,
+		t.MonthAmountSatOut,
+		t.MonthFee.StringFixedBank(0),
+		t.AmountIn,
+		t.AmountOut,
+		int64(math.Round(t.Efficiency)),
+	)
 	return
 }
 
 func printContracts(contracts *lnrpc.ForwardingHistoryResponse, id uint64) {
 
+	// Table formater
 	title := "  Num " +
 		"|            Time           " +
 		"|  Timestamp " +
@@ -428,8 +491,11 @@ func printContracts(contracts *lnrpc.ForwardingHistoryResponse, id uint64) {
 		"|Amount Out" +
 		"| Fee Msat"
 
+	line := strings.Repeat("-", len(title))
+	row := "%5d | %24s | %10d |%10s |%10s |%9d |%9d |%6d"
+
 	fmt.Printf(title + "\n")
-	fmt.Printf(strings.Repeat("-", len(title)) + "\n")
+	fmt.Printf(line + "\n")
 
 	sort.SliceStable(contracts.ForwardingEvents, func(i, j int) bool {
 		return contracts.ForwardingEvents[i].Timestamp > contracts.ForwardingEvents[j].Timestamp
@@ -448,7 +514,7 @@ func printContracts(contracts *lnrpc.ForwardingHistoryResponse, id uint64) {
 		markIn := fmt.Sprintf("%7d:%04d:%1d", in.BlockHeight, in.TxIndex, in.TxPosition)
 		markOut := fmt.Sprintf("%7d:%04d:%1d", out.BlockHeight, out.TxIndex, out.TxPosition)
 
-		fmt.Printf("%5d | %24s | %10d |%10s |%10s |%9d |%9d |%6d\n",
+		fmt.Printf(row+"\n",
 			i+1,
 			tm,
 			c.Timestamp,
@@ -460,7 +526,6 @@ func printContracts(contracts *lnrpc.ForwardingHistoryResponse, id uint64) {
 		)
 	}
 	return
-
 }
 
 func printRespJSON(resp proto.Message) {
