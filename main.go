@@ -1,18 +1,16 @@
-//
 package main
 
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
-	"github.com/btcsuite/btcutil"
 	"github.com/urfave/cli/v2"
 
 	"google.golang.org/grpc"
 )
 
 const (
+	defaultLndDir			= "~/.lnd"
 	defaultDataDir          = "data"
 	defaultChainSubDir      = "chain"
 	defaultTLSCertFilename  = "tls.cert"
@@ -22,9 +20,6 @@ const (
 )
 
 var (
-	defaultLndDir      = btcutil.AppDataDir("lnd", false)
-	defaultTLSCertPath = filepath.Join(defaultLndDir, defaultTLSCertFilename)
-
 	// maxMsgRecvSize is the largest message our client will receive. We
 	// set this to 200MiB atm.
 	maxMsgRecvSize = grpc.MaxCallRecvMsgSize(1 * 1024 * 1024 * 200)
@@ -45,11 +40,6 @@ func main() {
 			Name:  "lnddir",
 			Value: defaultLndDir,
 			Usage: "path to lnd's base directory",
-		},
-		&cli.StringFlag{
-			Name:  "tlscertpath",
-			Value: defaultTLSCertPath,
-			Usage: "path to TLS certificate",
 		},
 		&cli.StringFlag{
 			Name:  "chain, c",

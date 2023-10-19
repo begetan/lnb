@@ -2,7 +2,6 @@ package client
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -10,7 +9,6 @@ import (
 
 	"gopkg.in/macaroon.v2"
 
-	"github.com/btcsuite/btcutil"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/urfave/cli/v2"
@@ -20,6 +18,7 @@ import (
 )
 
 const (
+	defaultLndDir			= "~/.lnd"
 	defaultDataDir          = "data"
 	defaultChainSubDir      = "chain"
 	defaultTLSCertFilename  = "tls.cert"
@@ -29,9 +28,6 @@ const (
 )
 
 var (
-	defaultLndDir      = btcutil.AppDataDir("lnd", false)
-	defaultTLSCertPath = filepath.Join(defaultLndDir, defaultTLSCertFilename)
-
 	// maxMsgRecvSize is the largest message our client will receive. We
 	// set this to 200MiB atm.
 	maxMsgRecvSize = grpc.MaxCallRecvMsgSize(1 * 1024 * 1024 * 200)
@@ -71,7 +67,7 @@ func getClientConn(ctx *cli.Context, skipMacaroons bool) *grpc.ClientConn {
 	// if we're not skipping macaroon processing.
 	if !ctx.Bool("no-macaroons") && !skipMacaroons {
 		// Load the specified macaroon file.
-		macBytes, err := ioutil.ReadFile(macPath)
+		macBytes, err := os.ReadFile(macPath)
 		if err != nil {
 			fatal(fmt.Errorf("unable to read macaroon path (check "+
 				"the network setting!): %v", err))
@@ -109,7 +105,10 @@ func getClientConn(ctx *cli.Context, skipMacaroons bool) *grpc.ClientConn {
 		}
 
 		// Now we append the macaroon credentials to the dial options.
-		cred := macaroons.NewMacaroonCredential(constrainedMac)
+		cred, err := macaroons.NewMacaroonCredential(constrainedMac)
+		if err != nil {
+			fatal(err)
+		}
 		opts = append(opts, grpc.WithPerRPCCredentials(cred))
 	}
 	opts = append(opts, grpc.WithDefaultCallOptions(maxMsgRecvSize))
