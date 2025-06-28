@@ -411,10 +411,10 @@ func printBalance(channels []lndclient.ChannelInfo) {
 		"| Efficiency"
 	line := strings.Repeat("-", len(title))
 
-	row := "%9d |%9d |%9d |%9d | %5d%% |%9d %-9d |%5d%%"
+	const row = "%9d |%9d |%9d |%9d | %5d%% |%9d %-9d |%5d%%\n"
 
-	fmt.Printf(title + "\n")
-	fmt.Printf(line + "\n")
+	fmt.Println(title)
+	fmt.Println(line)
 
 	b := TotalBalance{}
 
@@ -432,7 +432,7 @@ func printBalance(channels []lndclient.ChannelInfo) {
 		b.Efficiency = (float64(b.AmountIn) + float64(b.AmountOut)) / float64(b.Capacity) * 100
 	}
 
-	fmt.Printf(row+"\n",
+	fmt.Printf(row,
 		b.Capacity,
 		b.LocalBalance,
 		b.RemoteBalance,
@@ -457,11 +457,11 @@ func printChannels(channels []lndclient.ChannelInfo, sum SumHTLC) {
 		"| Total In Out Amount" +
 		"| Effcy"
 	line := strings.Repeat("-", len(title))
-	row := "%5d%s|%11s |%10s |%9d |%9d |%9d |%5d%% |%9d %-9d |%9d %-9d |%6s |%9d %-9d |%5d%%"
+	const row = "%5d%s|%11s |%10s |%9d |%9d |%9d |%5d%% |%9d %-9d |%9d %-9d |%6s |%9d %-9d |%5d%%\n"
 
 	// Print table
-	fmt.Printf(title + "\n")
-	fmt.Printf(line + "\n")
+	fmt.Println(title)
+	fmt.Println(line)
 
 	sort.SliceStable(channels, func(i, j int) bool {
 		return channels[i].ChannelID > channels[j].ChannelID
@@ -500,7 +500,7 @@ func printChannels(channels []lndclient.ChannelInfo, sum SumHTLC) {
 
 		}
 
-		fmt.Printf(row+"\n",
+		fmt.Printf(row,
 			i+1,
 			active,
 			mark,
@@ -539,8 +539,8 @@ func printChannels(channels []lndclient.ChannelInfo, sum SumHTLC) {
 	}
 
 	// Print total row
-	fmt.Printf(line + "\n")
-	fmt.Printf(row+"\n",
+	fmt.Println(line)
+	fmt.Printf(row,
 		len(channels),
 		" ",
 		"              ",
@@ -573,10 +573,10 @@ func printContracts(contracts []lndclient.ForwardingEvent, id uint64) {
 		"| Fee Msat"
 
 	line := strings.Repeat("-", len(title))
-	row := "%5d | %24s | %10d |%10s |%10s |%9d |%9d |%6d"
+	const row = "%5d | %24s | %10d |%10s |%10s |%9d |%9d |%6d\n"
 
-	fmt.Printf(title + "\n")
-	fmt.Printf(line + "\n")
+	fmt.Println(title)
+	fmt.Println(line)
 
 	sort.SliceStable(contracts, func(i, j int) bool {
 		return contracts[i].Timestamp.After(contracts[j].Timestamp)
@@ -595,7 +595,7 @@ func printContracts(contracts []lndclient.ForwardingEvent, id uint64) {
 		markIn := fmt.Sprintf("%7d:%04d:%1d", in.BlockHeight, in.TxIndex, in.TxPosition)
 		markOut := fmt.Sprintf("%7d:%04d:%1d", out.BlockHeight, out.TxIndex, out.TxPosition)
 
-		fmt.Printf(row+"\n",
+		fmt.Printf(row,
 			i+1,
 			tm,
 			c.Timestamp.Unix(),
