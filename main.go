@@ -121,6 +121,10 @@ func main() {
 			Usage: "path to lnd's base directory",
 		},
 		&cli.StringFlag{
+			Name:  "tlscertpath",
+			Usage: "path to lnd's tls.cert",
+		},
+		&cli.StringFlag{
 			Name: "network, n",
 			Usage: "the network lnd is running on e.g. mainnet, " +
 				"testnet, etc.",
