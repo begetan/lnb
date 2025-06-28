@@ -121,11 +121,6 @@ func main() {
 			Usage: "path to lnd's base directory",
 		},
 		&cli.StringFlag{
-			Name:  "chain, c",
-			Usage: "the chain lnd is running on e.g. bitcoin",
-			Value: "bitcoin",
-		},
-		&cli.StringFlag{
 			Name: "network, n",
 			Usage: "the network lnd is running on e.g. mainnet, " +
 				"testnet, etc.",
