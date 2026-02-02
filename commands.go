@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/begetan/lnb/client"
-	"github.com/lightninglabs/protobuf-hex-display/jsonpb"
-	"github.com/lightninglabs/protobuf-hex-display/proto"
+	"github.com/btcsuite/btcd/btcutil"
+	"github.com/lightninglabs/lndclient"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing/route"
@@ -25,30 +28,30 @@ type SumHTLC map[uint64]ChanHTLC
 // ChanHTLC contains formarding amounts and fees for given channell
 type ChanHTLC struct {
 	Day struct {
-		AmountSatIn  uint64
-		AmountSatOut uint64
-		FeeMsat      uint64
+		AmountSatIn  btcutil.Amount
+		AmountSatOut btcutil.Amount
+		FeeMsat      lnwire.MilliSatoshi
 	}
 	Week struct {
-		AmountSatIn  uint64
-		AmountSatOut uint64
-		FeeMsat      uint64
+		AmountSatIn  btcutil.Amount
+		AmountSatOut btcutil.Amount
+		FeeMsat      lnwire.MilliSatoshi
 	}
 	Month struct {
-		AmountSatIn  uint64
-		AmountSatOut uint64
-		FeeMsat      uint64
+		AmountSatIn  btcutil.Amount
+		AmountSatOut btcutil.Amount
+		FeeMsat      lnwire.MilliSatoshi
 	}
 }
 
 // TotalBalance contains total data for channels
 type TotalBalance struct {
-	Capacity      int64
-	LocalBalance  int64
-	RemoteBalance int64
-	AmountIn      int64
-	AmountOut     int64
-	CommitFee     int64
+	Capacity      btcutil.Amount
+	LocalBalance  btcutil.Amount
+	RemoteBalance btcutil.Amount
+	AmountIn      btcutil.Amount
+	AmountOut     btcutil.Amount
+	CommitFee     btcutil.Amount
 	Ratio         float64
 	Efficiency    float64
 }
@@ -56,10 +59,10 @@ type TotalBalance struct {
 // TotalChannels contains extended total data for all channels
 type TotalChannels struct {
 	TotalBalance
-	DayAmountSatIn    uint64
-	DayAmountSatOut   uint64
-	MonthAmountSatIn  uint64
-	MonthAmountSatOut uint64
+	DayAmountSatIn    btcutil.Amount
+	DayAmountSatOut   btcutil.Amount
+	MonthAmountSatIn  btcutil.Amount
+	MonthAmountSatOut btcutil.Amount
 
 	DayFee   decimal.Decimal
 	WeekFee  decimal.Decimal
@@ -68,34 +71,102 @@ type TotalChannels struct {
 
 func getStatus(ctx *cli.Context) error {
 	ctxb := context.Background()
-	client, cleanUp := client.GetClient(ctx)
-	defer cleanUp()
-
-	req := &lnrpc.GetInfoRequest{}
-	resp, err := client.GetInfo(ctxb, req)
+	client, err := getClient(ctxb, ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to LND: %w", err)
+	}
+	defer client.Close()
+
+	resp, err := client.Client.GetInfo(ctxb)
+	if err != nil {
+		return fmt.Errorf("client.GetInfo failed: %w", err)
 	}
 
-	printRespJSON(resp)
+	// IdentityPubkey is printed as a list of numbers. Fix this.
+	// Also use under_score style as in original lnb.
+	// This is a modified version of https://pkg.go.dev/github.com/lightninglabs/lndclient@v0.19.0-10#Info
+	type Info struct {
+		// Version is the version that lnd is running.
+		Version string `json:"version"`
+
+		// BlockHeight is the best block height that lnd has knowledge of.
+		BlockHeight uint32 `json:"block_height"`
+
+		// IdentityPubkey is our node's pubkey.
+		IdentityPubkey string `json:"identity_pubkey"`
+
+		// Alias is our node's alias.
+		Alias string `json:"alias"`
+
+		// Network is the network we are currently operating on.
+		Network string `json:"network"`
+
+		// Uris is the set of our node's advertised uris.
+		Uris []string `json:"uris"`
+
+		// SyncedToChain is true if the wallet's view is synced to the main
+		// chain.
+		SyncedToChain bool `json:"synced_to_chain"`
+
+		// SyncedToGraph is true if we consider ourselves to be synced with the
+		// public channel graph.
+		SyncedToGraph bool `json:"synced_to_graph"`
+
+		// BestHeaderTimeStamp is the best block timestamp known to the wallet.
+		BestHeaderTimeStamp int64 `json:"best_header_timestamp"`
+
+		// ActiveChannels is the number of active channels we have.
+		ActiveChannels uint32 `json:"num_active_channels"`
+
+		// InactiveChannels is the number of inactive channels we have.
+		InactiveChannels uint32 `json:"num_inactive_channels"`
+
+		// PendingChannels is the number of pending channels we have.
+		PendingChannels uint32 `json:"num_pending_channels"`
+	}
+
+	printRespJSON(Info{
+		Version:             resp.Version,
+		BlockHeight:         resp.BlockHeight,
+		IdentityPubkey:      hex.EncodeToString(resp.IdentityPubkey[:]),
+		Alias:               resp.Alias,
+		Network:             resp.Network,
+		Uris:                resp.Uris,
+		SyncedToChain:       resp.SyncedToChain,
+		SyncedToGraph:       resp.SyncedToGraph,
+		BestHeaderTimeStamp: resp.BestHeaderTimeStamp.Unix(),
+		ActiveChannels:      resp.ActiveChannels,
+		InactiveChannels:    resp.InactiveChannels,
+		PendingChannels:     resp.PendingChannels,
+	})
 	return nil
 }
 
 func getBalance(ctx *cli.Context) error {
 	ctxb := context.Background()
-	client, cleanUp := client.GetClient(ctx)
-	defer cleanUp()
+	client, err := getClient(ctxb, ctx)
+	if err != nil {
+		return fmt.Errorf("failed to connect to LND: %w", err)
+	}
+	defer client.Close()
 
-	req := &lnrpc.ListChannelsRequest{
-		ActiveOnly:   ctx.Bool("active_only"),
-		InactiveOnly: ctx.Bool("inactive_only"),
-		PublicOnly:   ctx.Bool("public_only"),
-		PrivateOnly:  ctx.Bool("private_only"),
+	var opts []lndclient.ListChannelsOption
+	if ctx.Bool("inactive_only") {
+		opts = append(opts, func(r *lnrpc.ListChannelsRequest) {
+			r.InactiveOnly = true
+		})
+	}
+	if ctx.Bool("private_only") {
+		opts = append(opts, func(r *lnrpc.ListChannelsRequest) {
+			r.PrivateOnly = true
+		})
 	}
 
-	resp, err := client.ListChannels(ctxb, req)
+	resp, err := client.Client.ListChannels(
+		ctxb, ctx.Bool("active_only"), ctx.Bool("public_only"), opts...,
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("client.ListChannels failed: %w", err)
 	}
 
 	printBalance(resp)
@@ -106,13 +177,17 @@ func getBalance(ctx *cli.Context) error {
 
 func listChannels(ctx *cli.Context) error {
 	ctxb := context.Background()
-	client, cleanUp := client.GetClient(ctx)
-	defer cleanUp()
+	client, err := getClient(ctxb, ctx)
+	if err != nil {
+		return fmt.Errorf("failed to connect to LND: %w", err)
+	}
+	defer client.Close()
 
-	peer := ctx.String("peer")
+	var opts []lndclient.ListChannelsOption
 
 	// If the user requested channels with a particular key,
 	// parse the provided pubkey.
+	peer := ctx.String("peer")
 	var peerKey []byte
 	if len(peer) > 0 {
 		pk, err := route.NewVertexFromStr(peer)
@@ -121,22 +196,29 @@ func listChannels(ctx *cli.Context) error {
 		}
 
 		peerKey = pk[:]
+
+		opts = append(opts, lndclient.WithPeer(peerKey))
 	}
 
-	req := &lnrpc.ListChannelsRequest{
-		ActiveOnly:   ctx.Bool("active_only"),
-		InactiveOnly: ctx.Bool("inactive_only"),
-		PublicOnly:   ctx.Bool("public_only"),
-		PrivateOnly:  ctx.Bool("private_only"),
-		Peer:         peerKey,
+	if ctx.Bool("inactive_only") {
+		opts = append(opts, func(r *lnrpc.ListChannelsRequest) {
+			r.InactiveOnly = true
+		})
+	}
+	if ctx.Bool("private_only") {
+		opts = append(opts, func(r *lnrpc.ListChannelsRequest) {
+			r.PrivateOnly = true
+		})
 	}
 
-	resp, err := client.ListChannels(ctxb, req)
+	resp, err := client.Client.ListChannels(
+		ctxb, ctx.Bool("active_only"), ctx.Bool("public_only"), opts...,
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("client.ListChannels failed: %w", err)
 	}
 
-	count, err := countHTLC(ctx)
+	count, err := countHTLC(ctxb, ctx, client)
 	if err != nil {
 		return err
 	}
@@ -149,12 +231,15 @@ func listChannels(ctx *cli.Context) error {
 
 func listContracts(ctx *cli.Context) error {
 	ctxb := context.Background()
-	client, cleanUp := client.GetClient(ctx)
-	defer cleanUp()
+	client, err := getClient(ctxb, ctx)
+	if err != nil {
+		return fmt.Errorf("failed to connect to LND: %w", err)
+	}
+	defer client.Close()
+
 	var (
-		startTime, endTime     uint64
+		startTime, endTime     time.Time
 		indexOffset, maxEvents uint32
-		err                    error
 	)
 	args := ctx.Args().Slice()
 
@@ -191,26 +276,28 @@ func listContracts(ctx *cli.Context) error {
 
 	switch {
 	case ctx.IsSet("start_time"):
-		startTime = ctx.Uint64("start_time")
+		startTime = time.Unix(int64(ctx.Uint64("start_time")), 0)
 	case len(args) > 0:
-		startTime, err = strconv.ParseUint(args[0], 10, 64)
+		startTimeUint, err := strconv.ParseUint(args[0], 10, 64)
 		if err != nil {
 			return fmt.Errorf("unable to decode start_time %v", err)
 		}
+		startTime = time.Unix(int64(startTimeUint), 0)
 		args = args[1:]
 	default:
 		now := time.Now().UTC()
-		startTime = uint64(now.Add(-time.Hour * 24 * 30).Unix())
+		startTime = now.Add(-time.Hour * 24 * 30)
 	}
 
 	switch {
 	case ctx.IsSet("end_time"):
-		endTime = ctx.Uint64("end_time")
+		endTime = time.Unix(int64(ctx.Uint64("end_time")), 0)
 	case len(args) > 0:
-		endTime, err = strconv.ParseUint(args[0], 10, 64)
+		endTimeUint, err := strconv.ParseUint(args[0], 10, 64)
 		if err != nil {
 			return fmt.Errorf("unable to decode end_time: %v", err)
 		}
+		endTime = time.Unix(int64(endTimeUint), 0)
 		args = args[1:]
 	}
 
@@ -237,89 +324,84 @@ func listContracts(ctx *cli.Context) error {
 		maxEvents = uint32(m)
 	}
 
-	req := &lnrpc.ForwardingHistoryRequest{
-		StartTime:    startTime,
-		EndTime:      endTime,
-		IndexOffset:  indexOffset,
-		NumMaxEvents: maxEvents,
+	req := lndclient.ForwardingHistoryRequest{
+		StartTime: startTime,
+		EndTime:   endTime,
+		Offset:    indexOffset,
+		MaxEvents: maxEvents,
 	}
-
-	resp, err := client.ForwardingHistory(ctxb, req)
+	resp, err := client.Client.ForwardingHistory(ctxb, req)
 	if err != nil {
 		return err
 	}
 
-	printContracts(resp, id)
+	printContracts(resp.Events, id)
 	//printRespJSON(resp)
 
 	return nil
 }
 
-func countHTLC(ctx *cli.Context) (SumHTLC, error) {
+func countHTLC(callerCtx context.Context, ctx *cli.Context,
+	client *lndclient.GrpcLndServices) (SumHTLC, error) {
 
 	sum := make(SumHTLC)
 
-	ctxb := context.Background()
-	client, cleanUp := client.GetClient(ctx)
-	defer cleanUp()
-
 	now := time.Now().UTC()
-	end := uint64(now.Unix())
 
-	startDay := uint64(now.Add(-time.Hour * 24).Unix())
-	startWeek := uint64(now.Add(-time.Hour * 24 * 7).Unix())
-	startMonth := uint64(now.Add(-time.Hour * 24 * 30).Unix())
+	startDay := now.Add(-time.Hour * 24)
+	startWeek := now.Add(-time.Hour * 24 * 7)
+	startMonth := now.Add(-time.Hour * 24 * 30)
 
-	req := &lnrpc.ForwardingHistoryRequest{
-		StartTime:    startMonth,
-		EndTime:      end,
-		IndexOffset:  0,
-		NumMaxEvents: 50000,
+	req := lndclient.ForwardingHistoryRequest{
+		StartTime: startMonth,
+		EndTime:   now,
+		Offset:    0,
+		MaxEvents: 50000,
 	}
-	resp, err := client.ForwardingHistory(ctxb, req)
+	resp, err := client.Client.ForwardingHistory(callerCtx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, event := range resp.ForwardingEvents {
+	for _, event := range resp.Events {
 		t := event.Timestamp
-		if event.ChanIdIn > 0 {
-			m := sum[event.ChanIdIn]
-			if t > startDay {
-				m.Day.AmountSatIn += event.AmtIn
+		if event.ChannelIn > 0 {
+			m := sum[event.ChannelIn]
+			if t.After(startDay) {
+				m.Day.AmountSatIn += event.AmountMsatIn.ToSatoshis()
 				m.Day.FeeMsat += event.FeeMsat
 			}
-			if t > startWeek {
-				m.Week.AmountSatIn += event.AmtIn
+			if t.After(startWeek) {
+				m.Week.AmountSatIn += event.AmountMsatIn.ToSatoshis()
 				m.Week.FeeMsat += event.FeeMsat
 			}
-			if t > startMonth {
-				m.Month.AmountSatIn += event.AmtIn
+			if t.After(startMonth) {
+				m.Month.AmountSatIn += event.AmountMsatIn.ToSatoshis()
 				m.Month.FeeMsat += event.FeeMsat
 			}
-			sum[event.ChanIdIn] = m
+			sum[event.ChannelIn] = m
 		}
-		if event.ChanIdOut > 0 {
-			m := sum[event.ChanIdOut]
-			if t > startDay {
-				m.Day.AmountSatOut += event.AmtOut
+		if event.ChannelOut > 0 {
+			m := sum[event.ChannelOut]
+			if t.After(startDay) {
+				m.Day.AmountSatOut += event.AmountMsatOut.ToSatoshis()
 				m.Day.FeeMsat += event.FeeMsat
 			}
-			if t > startWeek {
-				m.Week.AmountSatOut += event.AmtOut
+			if t.After(startWeek) {
+				m.Week.AmountSatOut += event.AmountMsatOut.ToSatoshis()
 				m.Week.FeeMsat += event.FeeMsat
 			}
-			if t > startMonth {
-				m.Month.AmountSatOut += event.AmtOut
+			if t.After(startMonth) {
+				m.Month.AmountSatOut += event.AmountMsatOut.ToSatoshis()
 				m.Month.FeeMsat += event.FeeMsat
 			}
-			sum[event.ChanIdOut] = m
+			sum[event.ChannelOut] = m
 		}
 	}
 	return sum, nil
 }
 
-func printBalance(channels *lnrpc.ListChannelsResponse) {
+func printBalance(channels []lndclient.ChannelInfo) {
 	title := " Capacity " +
 		"|    Local " +
 		"|   Remote " +
@@ -329,19 +411,19 @@ func printBalance(channels *lnrpc.ListChannelsResponse) {
 		"| Efficiency"
 	line := strings.Repeat("-", len(title))
 
-	row := "%9d |%9d |%9d |%9d | %5d%% |%9d %-9d |%5d%%"
+	const row = "%9d |%9d |%9d |%9d | %5d%% |%9d %-9d |%5d%%\n"
 
-	fmt.Printf(title + "\n")
-	fmt.Printf(line + "\n")
+	fmt.Println(title)
+	fmt.Println(line)
 
 	b := TotalBalance{}
 
-	for _, c := range channels.Channels {
+	for _, c := range channels {
 		b.Capacity += c.Capacity
 		b.LocalBalance += c.LocalBalance
 		b.RemoteBalance += c.RemoteBalance
-		b.AmountIn += c.TotalSatoshisReceived
-		b.AmountOut += c.TotalSatoshisSent
+		b.AmountIn += c.TotalReceived
+		b.AmountOut += c.TotalSent
 		b.CommitFee += c.CommitFee
 	}
 
@@ -350,7 +432,7 @@ func printBalance(channels *lnrpc.ListChannelsResponse) {
 		b.Efficiency = (float64(b.AmountIn) + float64(b.AmountOut)) / float64(b.Capacity) * 100
 	}
 
-	fmt.Printf(row+"\n",
+	fmt.Printf(row,
 		b.Capacity,
 		b.LocalBalance,
 		b.RemoteBalance,
@@ -362,7 +444,7 @@ func printBalance(channels *lnrpc.ListChannelsResponse) {
 	)
 }
 
-func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
+func printChannels(channels []lndclient.ChannelInfo, sum SumHTLC) {
 
 	t := TotalChannels{}
 
@@ -375,22 +457,22 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 		"| Total In Out Amount" +
 		"| Effcy"
 	line := strings.Repeat("-", len(title))
-	row := "%5d%s|%11s |%10s |%9d |%9d |%9d |%5d%% |%9d %-9d |%9d %-9d |%6s |%9d %-9d |%5d%%"
+	const row = "%5d%s|%11s |%10s |%9d |%9d |%9d |%5d%% |%9d %-9d |%9d %-9d |%6s |%9d %-9d |%5d%%\n"
 
 	// Print table
-	fmt.Printf(title + "\n")
-	fmt.Printf(line + "\n")
+	fmt.Println(title)
+	fmt.Println(line)
 
-	sort.SliceStable(channels.Channels, func(i, j int) bool {
-		return channels.Channels[i].ChanId > channels.Channels[j].ChanId
+	sort.SliceStable(channels, func(i, j int) bool {
+		return channels[i].ChannelID > channels[j].ChannelID
 	})
 
-	for i, c := range channels.Channels {
+	for i, c := range channels {
 		var ratio float64
 		var efficiency float64
 
-		totalIn := c.TotalSatoshisReceived
-		totalOut := c.TotalSatoshisSent
+		totalIn := c.TotalReceived
+		totalOut := c.TotalSent
 
 		if c.LocalBalance > 0 {
 			ratio = float64(c.LocalBalance) / float64(c.LocalBalance+c.RemoteBalance) * 100
@@ -402,11 +484,11 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 			active = " "
 		}
 
-		m := lnwire.NewShortChanIDFromInt(c.ChanId)
+		m := lnwire.NewShortChanIDFromInt(c.ChannelID)
 		mark := fmt.Sprintf("%7d:%04d:%1d", m.BlockHeight, m.TxIndex, m.TxPosition)
 
 		var monthFee string
-		monthFeeSat := decimal.NewFromInt(int64(sum[c.ChanId].Month.FeeMsat)).Div(decimal.NewFromInt(1000))
+		monthFeeSat := decimal.NewFromInt(int64(sum[c.ChannelID].Month.FeeMsat)).Div(decimal.NewFromInt(1000))
 
 		switch {
 		case monthFeeSat.IsZero():
@@ -418,19 +500,19 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 
 		}
 
-		fmt.Printf(row+"\n",
+		fmt.Printf(row,
 			i+1,
 			active,
 			mark,
-			c.RemotePubkey[:8],
+			hex.EncodeToString(c.PubKeyBytes[:4]),
 			c.Capacity,
 			c.LocalBalance,
 			c.RemoteBalance,
 			int64(math.Round(ratio)),
-			sum[c.ChanId].Day.AmountSatIn,
-			sum[c.ChanId].Day.AmountSatOut,
-			sum[c.ChanId].Month.AmountSatIn,
-			sum[c.ChanId].Month.AmountSatOut,
+			sum[c.ChannelID].Day.AmountSatIn,
+			sum[c.ChannelID].Day.AmountSatOut,
+			sum[c.ChannelID].Month.AmountSatIn,
+			sum[c.ChannelID].Month.AmountSatOut,
 			monthFee,
 			totalIn,
 			totalOut,
@@ -445,10 +527,10 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 		t.CommitFee += c.CommitFee
 		t.MonthFee = t.MonthFee.Add(monthFeeSat)
 
-		t.DayAmountSatIn += sum[c.ChanId].Day.AmountSatIn
-		t.DayAmountSatOut += sum[c.ChanId].Day.AmountSatOut
-		t.MonthAmountSatIn += sum[c.ChanId].Month.AmountSatIn
-		t.MonthAmountSatOut += sum[c.ChanId].Month.AmountSatOut
+		t.DayAmountSatIn += sum[c.ChannelID].Day.AmountSatIn
+		t.DayAmountSatOut += sum[c.ChannelID].Day.AmountSatOut
+		t.MonthAmountSatIn += sum[c.ChannelID].Month.AmountSatIn
+		t.MonthAmountSatOut += sum[c.ChannelID].Month.AmountSatOut
 
 	}
 	if t.LocalBalance > 0 {
@@ -457,9 +539,9 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 	}
 
 	// Print total row
-	fmt.Printf(line + "\n")
-	fmt.Printf(row+"\n",
-		len(channels.Channels),
+	fmt.Println(line)
+	fmt.Printf(row,
+		len(channels),
 		" ",
 		"              ",
 		"  ",
@@ -479,8 +561,7 @@ func printChannels(channels *lnrpc.ListChannelsResponse, sum SumHTLC) {
 	return
 }
 
-func printContracts(contracts *lnrpc.ForwardingHistoryResponse, id uint64) {
-
+func printContracts(contracts []lndclient.ForwardingEvent, id uint64) {
 	// Table formater
 	title := "  Num " +
 		"|            Time           " +
@@ -492,54 +573,46 @@ func printContracts(contracts *lnrpc.ForwardingHistoryResponse, id uint64) {
 		"| Fee Msat"
 
 	line := strings.Repeat("-", len(title))
-	row := "%5d | %24s | %10d |%10s |%10s |%9d |%9d |%6d"
+	const row = "%5d | %24s | %10d |%10s |%10s |%9d |%9d |%6d\n"
 
-	fmt.Printf(title + "\n")
-	fmt.Printf(line + "\n")
+	fmt.Println(title)
+	fmt.Println(line)
 
-	sort.SliceStable(contracts.ForwardingEvents, func(i, j int) bool {
-		return contracts.ForwardingEvents[i].Timestamp > contracts.ForwardingEvents[j].Timestamp
+	sort.SliceStable(contracts, func(i, j int) bool {
+		return contracts[i].Timestamp.After(contracts[j].Timestamp)
 	})
 
-	for i, c := range contracts.ForwardingEvents {
-		if id != 0 && id != c.ChanIdIn && id != c.ChanIdOut {
+	for i, c := range contracts {
+		if id != 0 && id != c.ChannelIn && id != c.ChannelOut {
 			continue
 		}
 
-		tm := time.Unix(int64(c.Timestamp), 0).Format(time.RFC3339)
+		tm := c.Timestamp.Format(time.RFC3339)
 
-		in := lnwire.NewShortChanIDFromInt(c.ChanIdIn)
-		out := lnwire.NewShortChanIDFromInt(c.ChanIdOut)
+		in := lnwire.NewShortChanIDFromInt(c.ChannelIn)
+		out := lnwire.NewShortChanIDFromInt(c.ChannelOut)
 
 		markIn := fmt.Sprintf("%7d:%04d:%1d", in.BlockHeight, in.TxIndex, in.TxPosition)
 		markOut := fmt.Sprintf("%7d:%04d:%1d", out.BlockHeight, out.TxIndex, out.TxPosition)
 
-		fmt.Printf(row+"\n",
+		fmt.Printf(row,
 			i+1,
 			tm,
-			c.Timestamp,
+			c.Timestamp.Unix(),
 			markIn,
 			markOut,
-			c.AmtIn,
-			c.AmtOut,
+			c.AmountMsatIn.ToSatoshis(),
+			c.AmountMsatOut.ToSatoshis(),
 			c.FeeMsat,
 		)
 	}
 	return
 }
 
-func printRespJSON(resp proto.Message) {
-	jsonMarshaler := &jsonpb.Marshaler{
-		EmitDefaults: true,
-		OrigName:     true,
-		Indent:       "    ",
+func printRespJSON(resp interface{}) {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "    ")
+	if err := encoder.Encode(resp); err != nil {
+		log.Fatalf("Failed to encode response in JSON: %v", err)
 	}
-
-	jsonStr, err := jsonMarshaler.MarshalToString(resp)
-	if err != nil {
-		fmt.Println("unable to decode response: ", err)
-		return
-	}
-
-	fmt.Println(jsonStr)
 }
